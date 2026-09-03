@@ -25,6 +25,20 @@ import {
    Change personal information from CONFIG only.
 ============================================================ */
 
+/* ============================================================
+   SUPABASE (shared reviews storage)
+============================================================ */
+
+const SUPABASE_URL = "https://wahsqsfgxwqjlxekinay.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhaHNxc2ZneHdxamx4ZWtpbmF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0MTU1MjAsImV4cCI6MjEwMzk5MTUyMH0.pagdUF17qo2ll_VmQglMyIRcKHHXKkvO3kIf5AKPrns";
+
+const SUPABASE_HEADERS = {
+  apikey: SUPABASE_ANON_KEY,
+  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  "Content-Type": "application/json",
+};
+
 const CONFIG = {
   name: "Ahtesham Ul Haq",
   city: "Gojra",
@@ -417,39 +431,33 @@ export default function FoodVloggerPortfolio() {
   const waLink = `https://wa.me/${CONFIG.whatsappNumber}`;
 
   /* ============================================================
-     LOAD REVIEWS
+     LOAD REVIEWS (from Supabase, shared for every visitor)
   ============================================================ */
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("food-vlogger-reviews");
+    const loadReviews = async () => {
+      try {
+        const response = await fetch(
+          `${SUPABASE_URL}/rest/v1/reviews?select=*&order=created_at.desc`,
+          { headers: SUPABASE_HEADERS }
+        );
 
-      if (saved) {
-        const parsed = JSON.parse(saved);
-
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setReviews(parsed);
+        if (!response.ok) {
+          throw new Error(`Load failed: ${response.status}`);
         }
+
+        const data = await response.json();
+
+        if (Array.isArray(data) && data.length > 0) {
+          setReviews(data);
+        }
+      } catch (error) {
+        console.error("Reviews load error:", error);
       }
-    } catch (error) {
-      console.error("Reviews load error:", error);
-    }
+    };
+
+    loadReviews();
   }, []);
-
-  /* ============================================================
-     SAVE REVIEWS
-  ============================================================ */
-
-  const saveReviews = (data) => {
-    try {
-      localStorage.setItem(
-        "food-vlogger-reviews",
-        JSON.stringify(data)
-      );
-    } catch (error) {
-      console.error("Review save error:", error);
-    }
-  };
 
   /* ============================================================
      SCROLL
@@ -504,7 +512,7 @@ export default function FoodVloggerPortfolio() {
      SUBMIT REVIEW
   ============================================================ */
 
-  const submitReview = (event) => {
+  const submitReview = async (event) => {
     event.preventDefault();
 
     if (
@@ -524,42 +532,75 @@ export default function FoodVloggerPortfolio() {
       text: form.text.trim(),
     };
 
-    let updated;
+    try {
+      if (editingId) {
+        const response = await fetch(
+          `${SUPABASE_URL}/rest/v1/reviews?id=eq.${editingId}`,
+          {
+            method: "PATCH",
+            headers: {
+              ...SUPABASE_HEADERS,
+              Prefer: "return=representation",
+            },
+            body: JSON.stringify(reviewData),
+          }
+        );
 
-    if (editingId) {
-      updated = reviews.map((review) =>
-        review.id === editingId
-          ? {
-              ...review,
-              ...reviewData,
-            }
-          : review
+        if (!response.ok) {
+          throw new Error(`Update failed: ${response.status}`);
+        }
+
+        const [updatedRow] = await response.json();
+
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === editingId
+              ? updatedRow || { ...review, ...reviewData }
+              : review
+          )
+        );
+      } else {
+        const response = await fetch(
+          `${SUPABASE_URL}/rest/v1/reviews`,
+          {
+            method: "POST",
+            headers: {
+              ...SUPABASE_HEADERS,
+              Prefer: "return=representation",
+            },
+            body: JSON.stringify(reviewData),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Insert failed: ${response.status}`);
+        }
+
+        const [newRow] = await response.json();
+
+        setReviews((prev) => [
+          newRow || { id: `review-${Date.now()}`, ...reviewData },
+          ...prev,
+        ]);
+      }
+
+      resetReview();
+
+      setTimeout(() => {
+        document
+          .getElementById("reviews")
+          ?.scrollIntoView({
+            behavior: "smooth",
+          });
+      }, 100);
+    } catch (error) {
+      console.error("Review save error:", error);
+      window.alert(
+        "Review save nahi ho saka. Internet check karein aur dobara try karein."
       );
-    } else {
-      updated = [
-        {
-          id: `review-${Date.now()}`,
-          ...reviewData,
-        },
-        ...reviews,
-      ];
-    }
-
-    setReviews(updated);
-    saveReviews(updated);
-    resetReview();
-
-    setTimeout(() => {
+    } finally {
       setSaving(false);
-    }, 300);
-
-    setTimeout(() => {
-      document
-        .getElementById("reviews")
-        ?.scrollIntoView({
-          behavior: "smooth",
-        });
-    }, 100);
+    }
   };
 
   /* ============================================================
@@ -590,7 +631,7 @@ export default function FoodVloggerPortfolio() {
      DELETE REVIEW
   ============================================================ */
 
-  const deleteReview = (id) => {
+  const deleteReview = async (id) => {
     const review = reviews.find((item) => item.id === id);
 
     if (!review) return;
@@ -601,15 +642,31 @@ export default function FoodVloggerPortfolio() {
 
     if (!confirmed) return;
 
-    const updated = reviews.filter(
-      (item) => item.id !== id
-    );
+    try {
+      const response = await fetch(
+        `${SUPABASE_URL}/rest/v1/reviews?id=eq.${id}`,
+        {
+          method: "DELETE",
+          headers: SUPABASE_HEADERS,
+        }
+      );
 
-    setReviews(updated);
-    saveReviews(updated);
+      if (!response.ok) {
+        throw new Error(`Delete failed: ${response.status}`);
+      }
 
-    if (editingId === id) {
-      resetReview();
+      setReviews((prev) =>
+        prev.filter((item) => item.id !== id)
+      );
+
+      if (editingId === id) {
+        resetReview();
+      }
+    } catch (error) {
+      console.error("Review delete error:", error);
+      window.alert(
+        "Review delete nahi ho saka. Internet check karein aur dobara try karein."
+      );
     }
   };
 
